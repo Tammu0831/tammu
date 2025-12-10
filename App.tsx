@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from './contexts/AuthContext';
 import Auth from './components/Auth';
 import Sidebar from './components/Sidebar';
@@ -9,6 +9,33 @@ import { Loader2 } from 'lucide-react';
 const App: React.FC = () => {
   const { currentUser, loading } = useAuth();
   const [selectedFriend, setSelectedFriend] = useState<Friend | null>(null);
+
+  // Handle hardware back button on Android / Mobile browser back
+  useEffect(() => {
+    const handlePopState = (event: PopStateEvent) => {
+      // When back button is pressed, close the chat (return to sidebar)
+      setSelectedFriend(null);
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  const handleSelectFriend = (friend: Friend) => {
+    // Push a state to history so the Android back button works naturally
+    window.history.pushState({ chatOpen: true }, '', `/chat/${friend.uid}`);
+    setSelectedFriend(friend);
+  };
+
+  const handleBack = () => {
+    // Simulate back button press (triggers popstate)
+    // If no history exists (unlikely in this flow), force null
+    if (window.history.state) {
+      window.history.back();
+    } else {
+      setSelectedFriend(null);
+    }
+  };
 
   if (loading) {
     return (
@@ -28,7 +55,7 @@ const App: React.FC = () => {
       {/* Sidebar: Hidden on mobile if chat is open */}
       <div className={`${selectedFriend ? 'hidden md:flex' : 'flex'} w-full md:w-auto h-full`}>
         <Sidebar 
-          onSelectFriend={setSelectedFriend} 
+          onSelectFriend={handleSelectFriend} 
           selectedFriendId={selectedFriend?.uid}
         />
       </div>
@@ -38,7 +65,7 @@ const App: React.FC = () => {
         {selectedFriend ? (
           <ChatWindow 
             selectedFriend={selectedFriend} 
-            onBack={() => setSelectedFriend(null)} 
+            onBack={handleBack} 
           />
         ) : (
           // Empty State
