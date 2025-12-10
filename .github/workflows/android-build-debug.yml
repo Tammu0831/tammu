@@ -1,4 +1,4 @@
-name: Build Android Debug APK
+name: Build Android Debug APK (auto-patch gradle & build)
 
 on:
   workflow_dispatch:
@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Java 21 (Temurin)
@@ -24,67 +24,142 @@ jobs:
           java -version || true
           echo "JAVA_HOME=$JAVA_HOME"
 
-      - name: Set GRADLE_USER_HOME
-        run: |
-          echo "GRADLE_USER_HOME=$RUNNER_TEMP/gradle-cache" >> $GITHUB_ENV
-
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 18
 
-      - name: Install npm dependencies
+      - name: Install npm deps
         run: npm install
 
-      - name: Create capacitor.config.json
+      - name: Create capacitor.config.json (if missing)
         run: |
-          echo '{"appId":"com.firechat.app","appName":"FireChat","webDir":"dist"}' > capacitor.config.json
+          if [ ! -f capacitor.config.json ]; then
+            echo '{"appId":"com.firechat.app","appName":"FireChat","webDir":"dist"}' > capacitor.config.json
+          fi
+          cat capacitor.config.json
 
       - name: Install Capacitor packages
         run: |
           npm install @capacitor/cli @capacitor/core @capacitor/android --save
 
-      - name: Build Web (Vite)
+      - name: Build web (Vite)
         run: npm run build
 
-      - name: Initialize Capacitor
+      - name: Initialize Capacitor & ensure android folder
         run: |
           npx cap init FireChat com.firechat.app --web-dir=dist || true
           npx cap add android || true
           npx cap sync android || true
+          # list to show android folder
+          ls -la android || true
 
-      - name: Install Android SDK & Tools
+      - name: Install Android SDK + Build Tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y wget unzip
+          sudo apt-get install -y wget unzip || true
           mkdir -p $HOME/android-sdk
           cd $HOME/android-sdk
           wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
-          mkdir -p tmp
-          unzip -q commandlinetools-linux-*.zip -d tmp
+          mkdir -p tmpcmd
+          unzip -q commandlinetools-linux-*.zip -d tmpcmd
           mkdir -p cmdline-tools/latest
-          mv tmp/cmdline-tools/* cmdline-tools/latest/
+          mv tmpcmd/cmdline-tools/* cmdline-tools/latest/ || true
+          rm -rf tmpcmd
+          rm -f commandlinetools-linux-*.zip
           export ANDROID_HOME=$HOME/android-sdk
           export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$PATH
-          yes | sdkmanager --licenses || true
-          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+          yes | sdkmanager --sdk_root=$ANDROID_HOME --licenses || true
+          sdkmanager --sdk_root=$ANDROID_HOME "platform-tools" "platforms;android-34" "build-tools;34.0.0" || true
 
-      - name: Set Android Env
+      - name: Export Android env
         run: |
           echo "ANDROID_HOME=$HOME/android-sdk" >> $GITHUB_ENV
           echo "$HOME/android-sdk/platform-tools" >> $GITHUB_PATH
           echo "$HOME/android-sdk/cmdline-tools/latest/bin" >> $GITHUB_PATH
           echo "JAVA_HOME=$JAVA_HOME" >> $GITHUB_ENV
 
-      - name: Build APK (force Java21)
+      - name: Patch Gradle wrapper and AGP + SDK versions (auto)
+        run: |
+          set -e
+          echo "Patching android gradle wrapper & build files..."
+
+          # 1) Ensure gradle wrapper directory exists
+          mkdir -p android/gradle/wrapper || true
+
+          # 2) Write a modern distributionUrl (Gradle 8.7)
+          cat > android/gradle/wrapper/gradle-wrapper.properties <<'GRADLE_WRAPPER'
+distributionBase=GRADLE_USER_HOME
+distributionPath=wrapper/dists
+zipStoreBase=GRADLE_USER_HOME
+zipStorePath=wrapper/dists
+distributionUrl=https\://services.gradle.org/distributions/gradle-8.7-bin.zip
+GRADLE_WRAPPER
+          echo "Wrote android/gradle/wrapper/gradle-wrapper.properties"
+
+          # 3) Update android/build.gradle to use AGP 8.3.0 (if present)
+          if [ -f android/build.gradle ]; then
+            echo "Patching android/build.gradle (AGP classpath -> 8.3.0)..."
+            # Replace any existing com.android.tools.build:gradle:... with 8.3.0
+            perl -0777 -pe "s/com\\.android\\.tools\\.build:gradle:[0-9\\.]+/com.android.tools.build:gradle:8.3.0/g" -i android/build.gradle || true
+            # if classpath line missing, attempt to insert into buildscript dependencies block
+            if ! grep -q "com.android.tools.build:gradle:8.3.0" android/build.gradle; then
+              # Try to append into buildscript dependencies
+              awk 'BEGIN{added=0} /dependencies *\\{/ && added==0 { print; print "        classpath \"com.android.tools.build:gradle:8.3.0\""; added=1; next } { print }' android/build.gradle > android/build.gradle.tmp && mv android/build.gradle.tmp android/build.gradle || true
+            fi
+          else
+            echo "Warning: android/build.gradle not found; skipping AGP patch"
+          fi
+
+          # 4) Update android/app/build.gradle: set compileSdkVersion and targetSdkVersion to 34
+          APP_BUILD="android/app/build.gradle"
+          if [ -f "$APP_BUILD" ]; then
+            echo "Patching $APP_BUILD (compileSdkVersion, targetSdkVersion -> 34)..."
+            perl -0777 -pe "s/compileSdkVersion\\s+\\d+/compileSdkVersion 34/g" -i "$APP_BUILD" || true
+            perl -0777 -pe "s/targetSdkVersion\\s+\\d+/targetSdkVersion 34/g" -i "$APP_BUILD" || true
+            # if compileSdkVersion not present, try to add into android block
+            if ! grep -q "compileSdkVersion" "$APP_BUILD"; then
+              awk 'BEGIN{added=0} /android *\\{/ && added==0 { print; print "    compileSdkVersion 34"; added=1; next } { print }' "$APP_BUILD" > "$APP_BUILD.tmp" && mv "$APP_BUILD.tmp" "$APP_BUILD" || true
+            fi
+          else
+            echo "Warning: $APP_BUILD not found; skipping SDK patch"
+          fi
+
+          # 5) Ensure gradle wrapper executable exists (if gradlew not present, try wrapper generation)
+          if [ ! -f android/gradlew ]; then
+            echo "gradlew not found in android/ — attempting to download wrapper zip from services (best-effort)..."
+            # best-effort: create simple gradlew script using wrapper properties (note: may fail if wrapper files missing)
+            curl -fsSLo android/gradlew https://raw.githubusercontent.com/gradle/gradle/master/gradle/wrapper/gradlew || true
+            chmod +x android/gradlew || true
+          fi
+
+          echo "Patching complete. Listing android folder:"
+          ls -la android || true
+
+      - name: Build APK (force Java21 + explicit java home)
         working-directory: android
         run: |
-          chmod +x gradlew
-          echo "Using JAVA_HOME: $JAVA_HOME"
-          java -version
+          set -e
+          echo "Using java:"
+          java -version || true
+          # compute JAVA_HOME reliably
+          JAVA_HOME_DIR=$(dirname "$(dirname "$(readlink -f "$(which java)")")")
+          echo "Computed JAVA_HOME=${JAVA_HOME_DIR}"
+          export JAVA_HOME="${JAVA_HOME_DIR}"
+          echo "JAVA_HOME set to $JAVA_HOME"
+
+          # clear possible corrupt jars
+          rm -rf "$GRADLE_USER_HOME/caches/jars-9" || true
+          rm -rf "$HOME/.gradle/caches/jars-9" || true
+
+          chmod +x gradlew || true
+          echo "Gradle version info:"
+          ./gradlew -version || true
+
+          # run assemble with explicit Java home
           ./gradlew -Dorg.gradle.java.home="$JAVA_HOME" assembleDebug --stacktrace --no-daemon
 
-      - name: Upload APK
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: firechat-debug-apk
