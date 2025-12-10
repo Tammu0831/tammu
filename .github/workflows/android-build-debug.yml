@@ -13,95 +13,60 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Java 17 (Temurin)
+      - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
-
-      - name: Verify Java
-        run: |
-          java -version
-          echo "JAVA_HOME=$JAVA_HOME"
-          echo "Using java from: $(which java)"
-
-      - name: Set GRADLE_USER_HOME (use runner temp)
-        run: |
-          echo "GRADLE_USER_HOME=$RUNNER_TEMP/gradle-cache" >> $GITHUB_ENV
-          echo "GRADLE_USER_HOME is set to $RUNNER_TEMP/gradle-cache"
-
-      - name: Install unzip
-        run: sudo apt-get install -y unzip
-
-      - name: Unzip if zip exists
-        run: |
-          ZIPFILE=$(ls *.zip 2>/dev/null | head -n 1 || true)
-          if [ -n "$ZIPFILE" ]; then
-            unzip -o "$ZIPFILE"
-          fi
 
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 18
 
-      - name: Install npm dependencies
+      - name: Install dependencies
         run: npm install
 
-      - name: Build web (Vite)
+      - name: Create capacitor.config.json
+        run: |
+          echo '{"appId":"com.firechat.app","appName":"FireChat","webDir":"dist"}' > capacitor.config.json
+
+      - name: Install Capacitor + Android
+        run: |
+          npm install @capacitor/cli @capacitor/core @capacitor/android --save
+
+      - name: Build Web (Vite)
         run: npm run build
 
-      - name: Install Capacitor packages
+      - name: Initialize Capacitor (ensures android folder created)
         run: |
-          npm install @capacitor/cli @capacitor/core --save
-          npm install @capacitor/android --save
-
-      - name: Create capacitor.config.json
-        run: echo '{"appId":"com.firechat.app","appName":"FireChat","webDir":"dist"}' > capacitor.config.json
+          npx cap init FireChat com.firechat.app --web-dir=dist || true
+          npx cap add android || true
+          npx cap sync android
 
       - name: Install Android SDK + Build Tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y wget tar unzip
+          sudo apt-get install -y unzip wget
           mkdir -p $HOME/android-sdk
           cd $HOME/android-sdk
-
           wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
-          mkdir -p tmp
-          unzip -q commandlinetools-linux-*.zip -d tmp
-
+          mkdir -p cmd
+          unzip -q commandlinetools-linux-*.zip -d cmd
           mkdir -p cmdline-tools/latest
-          mv tmp/cmdline-tools/* cmdline-tools/latest/
-          rm -rf tmp
-          rm -f commandlinetools-linux-*.zip
-
+          mv cmd/cmdline-tools/* cmdline-tools/latest/
           export ANDROID_HOME=$HOME/android-sdk
           export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$PATH
+          yes | sdkmanager --licenses
+          sdkmanager "platform-tools" "platforms;android-33" "build-tools;33.0.2"
 
-          yes | sdkmanager --sdk_root=$ANDROID_HOME --licenses || true
-          sdkmanager --sdk_root=$ANDROID_HOME "platform-tools" "platforms;android-33" "build-tools;33.0.2"
-
-      - name: Setup Android env for other steps
-        run: |
-          echo "ANDROID_HOME=$HOME/android-sdk" >> $GITHUB_ENV
-          echo "$HOME/android-sdk/platform-tools" >> $GITHUB_PATH
-          echo "$HOME/android-sdk/cmdline-tools/latest/bin" >> $GITHUB_PATH
-          echo "JAVA_HOME=$JAVA_HOME" >> $GITHUB_ENV
-          echo "$JAVA_HOME" >> $GITHUB_PATH
-
-      - name: Add Android Platform
-        run: |
-          npm explore @capacitor/android -- pwd || true
-          npx cap add android || true
-          npx cap sync android
-
-      - name: Build Debug APK (use Java17 explicitly)
+      - name: Build APK
         working-directory: android
         run: |
           chmod +x gradlew
-          ./gradlew -Dorg.gradle.java.home="$JAVA_HOME" assembleDebug --stacktrace
+          ./gradlew assembleDebug
 
-      - name: Upload APK artifact
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: firechat-debug-apk
