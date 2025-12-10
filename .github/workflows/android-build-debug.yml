@@ -8,24 +8,23 @@ on:
 jobs:
   build-debug-apk:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup unzip (for zip upload)
+      - name: Install unzip (if needed)
         run: |
           sudo apt-get update
           sudo apt-get install -y unzip || true
 
       - name: Unzip project if a zip exists (detect any .zip)
         run: |
-          # If a zip is uploaded at repo root, unzip it
           ZIPFILE=$(ls *.zip 2>/dev/null | head -n 1 || true)
           if [ -n "$ZIPFILE" ]; then
             echo "Found zip: $ZIPFILE — extracting..."
             mkdir -p extracted
             unzip -q "$ZIPFILE" -d extracted
-            # If extracted created a single folder, move its contents up
             FIRST_DIR=$(find extracted -mindepth 1 -maxdepth 1 -type d | head -n 1 || true)
             if [ -n "$FIRST_DIR" ]; then
               mv "$FIRST_DIR"/* .
@@ -38,22 +37,19 @@ jobs:
             echo "No zip file found — assuming repo files are already uploaded."
           fi
 
-      - name: Setup Node (install)
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: '18'
 
-      - name: Install dependencies (more forgiving)
-        run: |
-          npm install
+      - name: Install dependencies
+        run: npm install
 
       - name: Build web (Vite)
-        run: |
-          npm run build
+        run: npm run build
 
       - name: Install Capacitor CLI
-        run: |
-          npm install --no-audit --no-fund @capacitor/cli @capacitor/core
+        run: npm install --no-audit --no-fund @capacitor/cli @capacitor/core
 
       - name: Ensure capacitor.config.json exists
         run: |
@@ -67,7 +63,7 @@ jobs:
 }
 JSON
           fi
-          echo "----- capacitor.config.json -----"
+          echo "---- capacitor.config.json ----"
           cat capacitor.config.json || true
 
       - name: Setup Android SDK
