@@ -13,7 +13,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Java 17  # Java 21 causes AGP conflict
+      - name: Setup Java 17  # Java 17 is stable for AGP 8.x
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
@@ -51,7 +51,10 @@ jobs:
 
       - name: Create capacitor.config.json
         run: |
-          echo '{"appId":"com.firechat.app","appName":"FireChat","webDir":"dist"}' > capacitor.config.json
+          if [ ! -f capacitor.config.json ]; then
+            echo '{"appId":"com.firechat.app","appName":"FireChat","webDir":"dist"}' > capacitor.config.json
+          fi
+          cat capacitor.config.json
 
       - name: Install Capacitor packages
         run: |
@@ -65,37 +68,46 @@ jobs:
           npx cap init FireChat com.firechat.app --web-dir=dist || true
           npx cap add android || true
           npx cap sync android || true
+          ls -la android || true
 
       - name: Install Android SDK
         run: |
           sudo apt-get update
-          sudo apt-get install -y wget unzip
+          sudo apt-get install -y wget unzip || true
           mkdir -p $HOME/android-sdk
           cd $HOME/android-sdk
 
           wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
-          mkdir cmd
-          unzip -q commandlinetools-linux-*.zip -d cmd
+          mkdir -p tmpcmd
+          unzip -q commandlinetools-linux-*.zip -d tmpcmd
 
           mkdir -p cmdline-tools/latest
-          mv cmd/cmdline-tools/* cmdline-tools/latest/
+          mv tmpcmd/cmdline-tools/* cmdline-tools/latest/ || true
+
+          rm -rf tmpcmd
+          rm -f commandlinetools-linux-*.zip
 
           export ANDROID_HOME=$HOME/android-sdk
           export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$PATH
 
-          yes | sdkmanager --licenses
-          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+          yes | sdkmanager --sdk_root=$ANDROID_HOME --licenses || true
+          sdkmanager --sdk_root=$ANDROID_HOME "platform-tools" "platforms;android-34" "build-tools;34.0.0" || true
 
       - name: Export Android Env
         run: |
+          # Make sure both env vars point to the same SDK to avoid Gradle confusion
           echo "ANDROID_HOME=$HOME/android-sdk" >> $GITHUB_ENV
+          echo "ANDROID_SDK_ROOT=$HOME/android-sdk" >> $GITHUB_ENV
           echo "$HOME/android-sdk/platform-tools" >> $GITHUB_PATH
           echo "$HOME/android-sdk/cmdline-tools/latest/bin" >> $GITHUB_PATH
+          # expose JAVA_HOME set by actions/setup-java
+          echo "JAVA_HOME=$JAVA_HOME" >> $GITHUB_ENV
 
       - name: Patch Gradle & AGP
         run: |
           mkdir -p android/gradle/wrapper
 
+          # write a compatible Gradle distribution
           printf '%s\n' \
             "distributionBase=GRADLE_USER_HOME" \
             "distributionPath=wrapper/dists" \
@@ -104,22 +116,61 @@ jobs:
             "distributionUrl=https://services.gradle.org/distributions/gradle-8.3-bin.zip" \
             > android/gradle/wrapper/gradle-wrapper.properties
 
-          # Force AGP 8.1.0 (compatible with Java 17)
+          # update AGP to an 8.x version compatible with Java 17 (best-effort)
           if [ -f android/build.gradle ]; then
-            perl -0777 -pe "s/com\\.android\\.tools\\.build:gradle:[0-9\\.]+/com.android.tools.build:gradle:8.1.0/g" -i android/build.gradle
+            perl -0777 -pe "s/com\\.android\\.tools\\.build:gradle:[0-9\\.]+/com.android.tools.build:gradle:8.1.0/g" -i android/build.gradle || true
           fi
 
-          # Force Compile SDK + Target SDK
+          # force compile/target SDK to 34 (if present)
           if [ -f android/app/build.gradle ]; then
-            perl -0777 -pe "s/compileSdkVersion\\s+\\d+/compileSdkVersion 34/g" -i android/app/build.gradle
-            perl -0777 -pe "s/targetSdkVersion\\s+\\d+/targetSdkVersion 34/g" -i android/app/build.gradle
+            perl -0777 -pe "s/compileSdkVersion\\s+\\d+/compileSdkVersion 34/g" -i android/app/build.gradle || true
+            perl -0777 -pe "s/targetSdkVersion\\s+\\d+/targetSdkVersion 34/g" -i android/app/build.gradle || true
           fi
 
-      - name: Build APK (safe mode)
+      - name: Build APK (safe + verbose)
         working-directory: android
+        env:
+          GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx1536m"
         run: |
-          chmod +x gradlew
-          ./gradlew assembleDebug --stacktrace --info --no-daemon
+          set -euo pipefail
+
+          if [ ! -f ./gradlew ]; then
+            echo "ERROR: gradlew not found in android/ - cannot build" >&2
+            ls -la || true
+            exit 1
+          fi
+
+          chmod +x ./gradlew || true
+
+          echo "Gradle wrapper version:"
+          ./gradlew -version || true
+
+          # compute JAVA_HOME reliably (use the one provided by setup-java)
+          if [ -z "${JAVA_HOME:-}" ]; then
+            JAVA_HOME_DIR=$(dirname "$(dirname "$(readlink -f "$(which java)")")")
+            export JAVA_HOME="$JAVA_HOME_DIR"
+            echo "Computed JAVA_HOME=$JAVA_HOME"
+          else
+            echo "JAVA_HOME from environment is $JAVA_HOME"
+          fi
+
+          # clear old jar caches if any (safe)
+          rm -rf "$GRADLE_USER_HOME/caches/jars-9" || true
+          rm -rf "$HOME/.gradle/caches/jars-9" || true
+
+          # run assemble with retries (network/transient protection)
+          ATTEMPTS=2
+          for i in $(seq 1 $ATTEMPTS); do
+            echo "Gradle attempt $i/$ATTEMPTS ..."
+            ./gradlew assembleDebug --stacktrace --info --no-daemon -Dorg.gradle.java.home="$JAVA_HOME" && break
+            echo "Gradle attempt $i failed; retrying after sleep..."
+            sleep $((i * 6))
+            if [ "$i" -eq "$ATTEMPTS" ]; then
+              echo "Final Gradle attempt (debug output):"
+              ./gradlew assembleDebug --stacktrace --debug --no-daemon -Dorg.gradle.java.home="$JAVA_HOME" || true
+              exit 1
+            fi
+          done
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
