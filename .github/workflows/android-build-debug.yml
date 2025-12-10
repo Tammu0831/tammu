@@ -8,9 +8,6 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    env:
-      # safe default
-      GRADLE_USER_HOME: ${{ runner.temp }}/gradle-cache
 
     steps:
       - name: Checkout code
@@ -21,11 +18,17 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '17'
+
       - name: Verify Java
         run: |
           java -version
           echo "JAVA_HOME=$JAVA_HOME"
           echo "Using java from: $(which java)"
+
+      - name: Set GRADLE_USER_HOME (use runner temp)
+        run: |
+          echo "GRADLE_USER_HOME=$RUNNER_TEMP/gradle-cache" >> $GITHUB_ENV
+          echo "GRADLE_USER_HOME is set to $RUNNER_TEMP/gradle-cache"
 
       - name: Install unzip
         run: sudo apt-get install -y unzip
@@ -63,7 +66,6 @@ jobs:
           mkdir -p $HOME/android-sdk
           cd $HOME/android-sdk
 
-          # download command line tools
           wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
           mkdir -p tmp
           unzip -q commandlinetools-linux-*.zip -d tmp
@@ -76,22 +78,19 @@ jobs:
           export ANDROID_HOME=$HOME/android-sdk
           export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$PATH
 
-          # accept licenses and install required packages
           yes | sdkmanager --sdk_root=$ANDROID_HOME --licenses || true
           sdkmanager --sdk_root=$ANDROID_HOME "platform-tools" "platforms;android-33" "build-tools;33.0.2"
 
-      - name: Setup Android env for rest of steps
+      - name: Setup Android env for other steps
         run: |
           echo "ANDROID_HOME=$HOME/android-sdk" >> $GITHUB_ENV
           echo "$HOME/android-sdk/platform-tools" >> $GITHUB_PATH
           echo "$HOME/android-sdk/cmdline-tools/latest/bin" >> $GITHUB_PATH
-          # expose JAVA_HOME provided by setup-java to subsequent steps (actions/setup-java sets it automatically)
           echo "JAVA_HOME=$JAVA_HOME" >> $GITHUB_ENV
           echo "$JAVA_HOME" >> $GITHUB_PATH
 
       - name: Add Android Platform
         run: |
-          # ensure capacitor android package is present and then add platform
           npm explore @capacitor/android -- pwd || true
           npx cap add android || true
           npx cap sync android
@@ -100,7 +99,6 @@ jobs:
         working-directory: android
         run: |
           chmod +x gradlew
-          echo "Gradle home: $GRADLE_USER_HOME"
           ./gradlew -Dorg.gradle.java.home="$JAVA_HOME" assembleDebug --stacktrace
 
       - name: Upload APK artifact
