@@ -79,45 +79,41 @@ jobs:
           echo "$HOME/android-sdk/cmdline-tools/latest/bin" >> $GITHUB_PATH
           echo "JAVA_HOME=$JAVA_HOME" >> $GITHUB_ENV
 
-      - name: Patch Gradle wrapper and AGP + SDK versions (auto)
+- name: Patch Gradle wrapper and AGP + SDK versions (auto)
         run: |
           set -e
           echo "Patching android gradle wrapper & build files..."
 
-          # 1) Ensure gradle wrapper directory exists
+          # ensure android/gradle/wrapper exists
           mkdir -p android/gradle/wrapper || true
 
-          # 2) Write a modern distributionUrl (Gradle 8.7)
-          cat > android/gradle/wrapper/gradle-wrapper.properties <<'GRADLE_WRAPPER'
-distributionBase=GRADLE_USER_HOME
-distributionPath=wrapper/dists
-zipStoreBase=GRADLE_USER_HOME
-zipStorePath=wrapper/dists
-distributionUrl=https\://services.gradle.org/distributions/gradle-8.7-bin.zip
-GRADLE_WRAPPER
+          # write gradle-wrapper.properties safely using printf (YAML-safe)
+          printf '%s\n' \
+            "distributionBase=GRADLE_USER_HOME" \
+            "distributionPath=wrapper/dists" \
+            "zipStoreBase=GRADLE_USER_HOME" \
+            "zipStorePath=wrapper/dists" \
+            "distributionUrl=https://services.gradle.org/distributions/gradle-8.7-bin.zip" \
+            > android/gradle/wrapper/gradle-wrapper.properties
           echo "Wrote android/gradle/wrapper/gradle-wrapper.properties"
 
-          # 3) Update android/build.gradle to use AGP 8.3.0 (if present)
+          # patch android/build.gradle to use AGP 8.3.0 if file exists
           if [ -f android/build.gradle ]; then
             echo "Patching android/build.gradle (AGP classpath -> 8.3.0)..."
-            # Replace any existing com.android.tools.build:gradle:... with 8.3.0
             perl -0777 -pe "s/com\\.android\\.tools\\.build:gradle:[0-9\\.]+/com.android.tools.build:gradle:8.3.0/g" -i android/build.gradle || true
-            # if classpath line missing, attempt to insert into buildscript dependencies block
             if ! grep -q "com.android.tools.build:gradle:8.3.0" android/build.gradle; then
-              # Try to append into buildscript dependencies
               awk 'BEGIN{added=0} /dependencies *\\{/ && added==0 { print; print "        classpath \"com.android.tools.build:gradle:8.3.0\""; added=1; next } { print }' android/build.gradle > android/build.gradle.tmp && mv android/build.gradle.tmp android/build.gradle || true
             fi
           else
             echo "Warning: android/build.gradle not found; skipping AGP patch"
           fi
 
-          # 4) Update android/app/build.gradle: set compileSdkVersion and targetSdkVersion to 34
+          # patch android/app/build.gradle compile/target SDK to 34
           APP_BUILD="android/app/build.gradle"
           if [ -f "$APP_BUILD" ]; then
             echo "Patching $APP_BUILD (compileSdkVersion, targetSdkVersion -> 34)..."
             perl -0777 -pe "s/compileSdkVersion\\s+\\d+/compileSdkVersion 34/g" -i "$APP_BUILD" || true
             perl -0777 -pe "s/targetSdkVersion\\s+\\d+/targetSdkVersion 34/g" -i "$APP_BUILD" || true
-            # if compileSdkVersion not present, try to add into android block
             if ! grep -q "compileSdkVersion" "$APP_BUILD"; then
               awk 'BEGIN{added=0} /android *\\{/ && added==0 { print; print "    compileSdkVersion 34"; added=1; next } { print }' "$APP_BUILD" > "$APP_BUILD.tmp" && mv "$APP_BUILD.tmp" "$APP_BUILD" || true
             fi
@@ -125,10 +121,9 @@ GRADLE_WRAPPER
             echo "Warning: $APP_BUILD not found; skipping SDK patch"
           fi
 
-          # 5) Ensure gradle wrapper executable exists (if gradlew not present, try wrapper generation)
+          # try to ensure gradlew exists; best-effort
           if [ ! -f android/gradlew ]; then
-            echo "gradlew not found in android/ — attempting to download wrapper zip from services (best-effort)..."
-            # best-effort: create simple gradlew script using wrapper properties (note: may fail if wrapper files missing)
+            echo "gradlew not found in android/ — adding placeholder gradlew (best-effort)"
             curl -fsSLo android/gradlew https://raw.githubusercontent.com/gradle/gradle/master/gradle/wrapper/gradlew || true
             chmod +x android/gradlew || true
           fi
