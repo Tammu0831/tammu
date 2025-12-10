@@ -14,9 +14,9 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install unzip
-        run: sudo apt-get install -y unzip || true
+        run: sudo apt-get install -y unzip
 
-      - name: Unzip project if zip exists
+      - name: Unzip if zip exists
         run: |
           ZIPFILE=$(ls *.zip 2>/dev/null | head -n 1 || true)
           if [ -n "$ZIPFILE" ]; then
@@ -35,39 +35,32 @@ jobs:
         run: npm run build
 
       - name: Install Capacitor
-        run: npm install @capacitor/cli @capacitor/core --save
+        run: |
+          npm install @capacitor/cli @capacitor/core --save
+          npm install @capacitor/android --save
 
       - name: Create capacitor.config.json
         run: echo '{"appId":"com.firechat.app","appName":"FireChat","webDir":"dist"}' > capacitor.config.json
 
-      # ⭐ MANUAL ANDROID SDK INSTALL (100% working)
       - name: Install Android SDK + Build Tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y wget tar unzip || true
+          sudo apt-get install -y wget tar unzip
           mkdir -p $HOME/android-sdk
           cd $HOME/android-sdk
 
-          # download command line tools
           wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
-
-          # unzip into a temporary folder to avoid "move into itself" problem
           mkdir -p tmpcmd
           unzip -q commandlinetools-linux-*.zip -d tmpcmd
 
-          # create target structure and move files correctly
           mkdir -p cmdline-tools/latest
           mv tmpcmd/cmdline-tools/* cmdline-tools/latest/
-
-          # cleanup
           rm -rf tmpcmd
           rm -f commandlinetools-linux-*.zip
 
-          # set ANDROID_HOME for this step
           export ANDROID_HOME=$HOME/android-sdk
           export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$PATH
 
-          # accept licenses and install basic SDK packages
           yes | sdkmanager --sdk_root=$ANDROID_HOME --licenses || true
           sdkmanager --sdk_root=$ANDROID_HOME "platform-tools" "platforms;android-33" "build-tools;33.0.2"
 
@@ -75,11 +68,11 @@ jobs:
         run: |
           echo "ANDROID_HOME=$HOME/android-sdk" >> $GITHUB_ENV
           echo "$HOME/android-sdk/platform-tools" >> $GITHUB_PATH
-          echo "$HOME/android-sdk/build-tools/33.0.2" >> $GITHUB_PATH
+          echo "$HOME/android-sdk/cmdline-tools/latest/bin" >> $GITHUB_PATH
 
       - name: Add Android Platform
         run: |
-          npx cap add android || true
+          npx cap add android
           npx cap sync android
 
       - name: Build Debug APK
