@@ -13,20 +13,41 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Java 21
+      - name: Setup Java 17  # Java 21 causes AGP conflict
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
-          java-version: '21'
+          java-version: '17'
 
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 18
 
+      # Cache npm deps
+      - name: Cache node modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.npm
+            node_modules
+          key: node-modules-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            node-modules-
+
+      # Cache Gradle
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-cache-${{ runner.os }}-${{ hashFiles('**/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-cache-${{ runner.os }}-
+
       - name: Install npm deps
-        run: |
-          npm install
+        run: npm install
 
       - name: Create capacitor.config.json
         run: |
@@ -70,7 +91,6 @@ jobs:
           echo "ANDROID_HOME=$HOME/android-sdk" >> $GITHUB_ENV
           echo "$HOME/android-sdk/platform-tools" >> $GITHUB_PATH
           echo "$HOME/android-sdk/cmdline-tools/latest/bin" >> $GITHUB_PATH
-          echo "JAVA_HOME=$JAVA_HOME" >> $GITHUB_ENV
 
       - name: Patch Gradle & AGP
         run: |
@@ -81,23 +101,25 @@ jobs:
             "distributionPath=wrapper/dists" \
             "zipStoreBase=GRADLE_USER_HOME" \
             "zipStorePath=wrapper/dists" \
-            "distributionUrl=https://services.gradle.org/distributions/gradle-8.7-bin.zip" \
+            "distributionUrl=https://services.gradle.org/distributions/gradle-8.3-bin.zip" \
             > android/gradle/wrapper/gradle-wrapper.properties
 
+          # Force AGP 8.1.0 (compatible with Java 17)
           if [ -f android/build.gradle ]; then
-            perl -0777 -pe "s/com\\.android\\.tools\\.build:gradle:[0-9\\.]+/com.android.tools.build:gradle:8.3.0/g" -i android/build.gradle
+            perl -0777 -pe "s/com\\.android\\.tools\\.build:gradle:[0-9\\.]+/com.android.tools.build:gradle:8.1.0/g" -i android/build.gradle
           fi
 
+          # Force Compile SDK + Target SDK
           if [ -f android/app/build.gradle ]; then
             perl -0777 -pe "s/compileSdkVersion\\s+\\d+/compileSdkVersion 34/g" -i android/app/build.gradle
             perl -0777 -pe "s/targetSdkVersion\\s+\\d+/targetSdkVersion 34/g" -i android/app/build.gradle
           fi
 
-      - name: Build APK
+      - name: Build APK (safe mode)
         working-directory: android
         run: |
           chmod +x gradlew
-          ./gradlew -Dorg.gradle.java.home="$JAVA_HOME" assembleDebug --stacktrace --no-daemon
+          ./gradlew assembleDebug --stacktrace --info --no-daemon
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
