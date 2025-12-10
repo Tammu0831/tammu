@@ -1,90 +1,91 @@
-name: Build Android Debug APK (Capacitor + Vite) - simple
+name: Build Android Debug APK
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
-  build-debug-apk:
+  build:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install unzip (if needed)
+      - name: Install unzip
         run: |
           sudo apt-get update
           sudo apt-get install -y unzip || true
 
-      - name: Unzip project if a zip exists (detect any .zip)
+      - name: Unzip project if zipped
         run: |
           ZIPFILE=$(ls *.zip 2>/dev/null | head -n 1 || true)
           if [ -n "$ZIPFILE" ]; then
-            echo "Found zip: $ZIPFILE — extracting..."
-            mkdir -p extracted
+            echo "Extracting $ZIPFILE..."
             unzip -q "$ZIPFILE" -d extracted
             FIRST_DIR=$(find extracted -mindepth 1 -maxdepth 1 -type d | head -n 1 || true)
             if [ -n "$FIRST_DIR" ]; then
               mv "$FIRST_DIR"/* .
-              rm -rf extracted
             else
               mv extracted/* .
-              rmdir extracted || true
             fi
+            rm -rf extracted
           else
-            echo "No zip file found — assuming repo files are already uploaded."
+            echo "No ZIP found. Using existing repo files."
           fi
 
-      - name: Setup Node.js
+      - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: 18
 
       - name: Install dependencies
-        run: npm install
+        run: |
+          npm install
 
       - name: Build web (Vite)
-        run: npm run build
+        run: |
+          npm run build
 
-      - name: Install Capacitor CLI
-        run: npm install --no-audit --no-fund @capacitor/cli @capacitor/core
+      - name: Install Capacitor
+        run: |
+          npm install @capacitor/cli @capacitor/core --save
 
-      - name: Ensure capacitor.config.json exists
+      - name: Create capacitor.config.json if missing
         run: |
           if [ ! -f capacitor.config.json ]; then
-            cat > capacitor.config.json <<'JSON'
+            echo "Creating capacitor.config.json..."
+            cat <<EOF > capacitor.config.json
 {
   "appId": "com.yourdomain.firechat",
   "appName": "FireChat",
   "webDir": "dist",
   "bundledWebRuntime": false
 }
-JSON
+EOF
           fi
-          echo "---- capacitor.config.json ----"
-          cat capacitor.config.json || true
+          cat capacitor.config.json
 
       - name: Setup Android SDK
         uses: r0adkll/setup-android@v2
         with:
           api-level: 33
-          build-tools: '33.0.2'
+          build-tools: 33.0.2
           target: android-33
 
-      - name: Add Android platform & sync Capacitor
+      - name: Add Android platform & sync
         run: |
           npx cap add android --force || true
-          npx cap sync android || true
+          npx cap sync android
 
-      - name: Build debug APK (Gradle)
+      - name: Build Debug APK
         working-directory: android
         run: |
-          chmod +x ./gradlew || true
-          ./gradlew assembleDebug --no-daemon || ./gradlew assembleDebug || true
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
 
-      - name: Upload debug APK artifact
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: android-debug-apk
