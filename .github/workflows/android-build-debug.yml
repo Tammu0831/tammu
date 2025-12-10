@@ -16,7 +16,7 @@ jobs:
       - name: Install unzip
         run: sudo apt-get install -y unzip || true
 
-      - name: Unzip if zip exists
+      - name: Unzip project if zip exists
         run: |
           ZIPFILE=$(ls *.zip 2>/dev/null | head -n 1 || true)
           if [ -n "$ZIPFILE" ]; then
@@ -31,7 +31,7 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Build with Vite
+      - name: Build Vite Project
         run: npm run build
 
       - name: Install Capacitor
@@ -40,13 +40,30 @@ jobs:
       - name: Create capacitor.config.json
         run: echo '{"appId":"com.firechat.app","appName":"FireChat","webDir":"dist"}' > capacitor.config.json
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          api-level: 33
-          build-tools: 33.0.2
+      # ⭐ MANUAL ANDROID SDK INSTALL (100% working)
+      - name: Install Android SDK + Build Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget tar unzip
+          mkdir -p $HOME/android-sdk
+          cd $HOME/android-sdk
+          wget https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
+          unzip commandlinetools-linux-*.zip
+          mkdir -p cmdline-tools
+          mv cmdline-tools cmdline-tools/latest
+          export ANDROID_HOME=$HOME/android-sdk
+          export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$PATH
+          echo "y" | sdkmanager --sdk_root=$ANDROID_HOME "platform-tools"
+          echo "y" | sdkmanager --sdk_root=$ANDROID_HOME "platforms;android-33"
+          echo "y" | sdkmanager --sdk_root=$ANDROID_HOME "build-tools;33.0.2"
 
-      - name: Add Android platform
+      - name: Setup Android env
+        run: |
+          echo "ANDROID_HOME=$HOME/android-sdk" >> $GITHUB_ENV
+          echo "$HOME/android-sdk/platform-tools" >> $GITHUB_PATH
+          echo "$HOME/android-sdk/build-tools/33.0.2" >> $GITHUB_PATH
+
+      - name: Add Android Platform
         run: |
           npx cap add android || true
           npx cap sync android
