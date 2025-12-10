@@ -16,12 +16,12 @@ jobs:
       - name: Install unzip
         run: sudo apt-get install -y unzip || true
 
-      - name: Unzip project if zip exists
+      - name: Unzip if zip exists
         run: |
-          for f in *.zip; do
-            [ -e "$f" ] || continue
-            unzip -o "$f"
-          done
+          ZIPFILE=$(ls *.zip 2>/dev/null | head -n 1 || true)
+          if [ -n "$ZIPFILE" ]; then
+            unzip -o "$ZIPFILE"
+          fi
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -31,23 +31,22 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Build web (Vite)
+      - name: Build with Vite
         run: npm run build
 
       - name: Install Capacitor
         run: npm install @capacitor/cli @capacitor/core --save
 
       - name: Create capacitor.config.json
-        run: echo '{"appId":"com.myapp.firechat","appName":"FireChat","webDir":"dist"}' > capacitor.config.json
+        run: echo '{"appId":"com.firechat.app","appName":"FireChat","webDir":"dist"}' > capacitor.config.json
 
       - name: Setup Android SDK
-        uses: r0adkll/setup-android@v2
+        uses: android-actions/setup-android@v3
         with:
           api-level: 33
           build-tools: 33.0.2
-          target: android-33
 
-      - name: Add Android platform & sync
+      - name: Add Android platform
         run: |
           npx cap add android || true
           npx cap sync android
