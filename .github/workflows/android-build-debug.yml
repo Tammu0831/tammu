@@ -8,16 +8,24 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      # safe default
+      GRADLE_USER_HOME: ${{ runner.temp }}/gradle-cache
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Java 17
+      - name: Setup Java 17 (Temurin)
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
+      - name: Verify Java
+        run: |
+          java -version
+          echo "JAVA_HOME=$JAVA_HOME"
+          echo "Using java from: $(which java)"
 
       - name: Install unzip
         run: sudo apt-get install -y unzip
@@ -34,13 +42,13 @@ jobs:
         with:
           node-version: 18
 
-      - name: Install dependencies
+      - name: Install npm dependencies
         run: npm install
 
-      - name: Build Vite Project
+      - name: Build web (Vite)
         run: npm run build
 
-      - name: Install Capacitor
+      - name: Install Capacitor packages
         run: |
           npm install @capacitor/cli @capacitor/core --save
           npm install @capacitor/android --save
@@ -55,40 +63,47 @@ jobs:
           mkdir -p $HOME/android-sdk
           cd $HOME/android-sdk
 
+          # download command line tools
           wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
           mkdir -p tmp
           unzip -q commandlinetools-linux-*.zip -d tmp
 
           mkdir -p cmdline-tools/latest
           mv tmp/cmdline-tools/* cmdline-tools/latest/
-
           rm -rf tmp
           rm -f commandlinetools-linux-*.zip
 
           export ANDROID_HOME=$HOME/android-sdk
           export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$PATH
 
+          # accept licenses and install required packages
           yes | sdkmanager --sdk_root=$ANDROID_HOME --licenses || true
           sdkmanager --sdk_root=$ANDROID_HOME "platform-tools" "platforms;android-33" "build-tools;33.0.2"
 
-      - name: Setup Android env
+      - name: Setup Android env for rest of steps
         run: |
           echo "ANDROID_HOME=$HOME/android-sdk" >> $GITHUB_ENV
           echo "$HOME/android-sdk/platform-tools" >> $GITHUB_PATH
           echo "$HOME/android-sdk/cmdline-tools/latest/bin" >> $GITHUB_PATH
+          # expose JAVA_HOME provided by setup-java to subsequent steps (actions/setup-java sets it automatically)
+          echo "JAVA_HOME=$JAVA_HOME" >> $GITHUB_ENV
+          echo "$JAVA_HOME" >> $GITHUB_PATH
 
       - name: Add Android Platform
         run: |
-          npx cap add android
+          # ensure capacitor android package is present and then add platform
+          npm explore @capacitor/android -- pwd || true
+          npx cap add android || true
           npx cap sync android
 
-      - name: Build Debug APK
+      - name: Build Debug APK (use Java17 explicitly)
         working-directory: android
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug
+          echo "Gradle home: $GRADLE_USER_HOME"
+          ./gradlew -Dorg.gradle.java.home="$JAVA_HOME" assembleDebug --stacktrace
 
-      - name: Upload APK
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: firechat-debug-apk
