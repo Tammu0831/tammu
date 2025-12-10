@@ -13,25 +13,36 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Java 17
+      - name: Setup Java 17 (Temurin)
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
+
+      - name: Verify Java
+        run: |
+          java -version || true
+          echo "JAVA_HOME=$JAVA_HOME" || true
+
+      - name: Set GRADLE_USER_HOME (use runner temp)
+        run: |
+          echo "GRADLE_USER_HOME=$RUNNER_TEMP/gradle-cache" >> $GITHUB_ENV
+          echo "GRADLE_USER_HOME is set to $RUNNER_TEMP/gradle-cache"
 
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 18
 
-      - name: Install dependencies
+      - name: Install npm dependencies
         run: npm install
 
       - name: Create capacitor.config.json
         run: |
           echo '{"appId":"com.firechat.app","appName":"FireChat","webDir":"dist"}' > capacitor.config.json
+          cat capacitor.config.json
 
-      - name: Install Capacitor + Android
+      - name: Install Capacitor packages (CLI + core + android)
         run: |
           npm install @capacitor/cli @capacitor/core @capacitor/android --save
 
@@ -40,33 +51,85 @@ jobs:
 
       - name: Initialize Capacitor (ensures android folder created)
         run: |
+          # init only if not initialized already
           npx cap init FireChat com.firechat.app --web-dir=dist || true
+          # ensure android platform is added
           npx cap add android || true
-          npx cap sync android
+          npx cap sync android || true
 
-      - name: Install Android SDK + Build Tools
+      - name: Install Android SDK + Build Tools (safe unzip)
         run: |
           sudo apt-get update
-          sudo apt-get install -y unzip wget
+          sudo apt-get install -y wget unzip || true
           mkdir -p $HOME/android-sdk
           cd $HOME/android-sdk
+
+          # download command line tools
           wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
-          mkdir -p cmd
-          unzip -q commandlinetools-linux-*.zip -d cmd
+
+          # extract safely into temporary folder to avoid mv into itself
+          mkdir -p tmpcmd
+          unzip -q commandlinetools-linux-*.zip -d tmpcmd
+
+          # create proper cmdline-tools/latest layout and move files
           mkdir -p cmdline-tools/latest
-          mv cmd/cmdline-tools/* cmdline-tools/latest/
+          mv tmpcmd/cmdline-tools/* cmdline-tools/latest/ || true
+
+          # cleanup
+          rm -rf tmpcmd
+          rm -f commandlinetools-linux-*.zip
+
+          # set SDK env for this step
           export ANDROID_HOME=$HOME/android-sdk
           export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$PATH
-          yes | sdkmanager --licenses
-          sdkmanager "platform-tools" "platforms;android-33" "build-tools;33.0.2"
 
-      - name: Build APK
+          # accept licenses and install required packages
+          yes | sdkmanager --sdk_root=$ANDROID_HOME --licenses || true
+          sdkmanager --sdk_root=$ANDROID_HOME "platform-tools" "platforms;android-33" "build-tools;33.0.2" || true
+
+      - name: Setup Android env for rest of steps
+        run: |
+          echo "ANDROID_HOME=$HOME/android-sdk" >> $GITHUB_ENV
+          echo "$HOME/android-sdk/platform-tools" >> $GITHUB_PATH
+          echo "$HOME/android-sdk/cmdline-tools/latest/bin" >> $GITHUB_PATH
+          # also expose JAVA_HOME set by setup-java
+          echo "JAVA_HOME=$JAVA_HOME" >> $GITHUB_ENV
+          echo "$JAVA_HOME" >> $GITHUB_PATH
+
+      - name: Ensure android platform present and sync
+        run: |
+          # confirm installed package
+          npm explore @capacitor/android -- pwd || true
+          # add/sync Android platform inside repo (idempotent)
+          npx cap add android || true
+          npx cap sync android || true
+          ls -la android || true
+
+      - name: Build Debug APK (force Java17 + clear cache)
         working-directory: android
         run: |
-          chmod +x gradlew
-          ./gradlew assembleDebug
+          echo "Detecting java..."
+          java -version || true
 
-      - name: Upload APK
+          # compute JAVA_HOME from java binary (reliable on runner)
+          JAVA_HOME_DIR=$(dirname "$(dirname "$(readlink -f "$(which java)")")")
+          echo "Exporting JAVA_HOME=${JAVA_HOME_DIR}"
+          export JAVA_HOME="${JAVA_HOME_DIR}"
+          echo "JAVA_HOME=$JAVA_HOME"
+
+          # clear potentially-corrupt Gradle jar caches (safe)
+          echo "Clearing Gradle jar caches (safe) ..."
+          rm -rf "$GRADLE_USER_HOME/caches/jars-9" || true
+          rm -rf "$HOME/.gradle/caches/jars-9" || true
+
+          chmod +x gradlew || true
+          echo "Gradle version info:"
+          ./gradlew -version || true
+
+          # run Gradle with explicit Java home (forces Java17)
+          ./gradlew -Dorg.gradle.java.home="$JAVA_HOME" assembleDebug --stacktrace --no-daemon
+
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: firechat-debug-apk
