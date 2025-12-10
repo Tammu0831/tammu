@@ -44,18 +44,32 @@ jobs:
       - name: Install Android SDK + Build Tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y wget tar unzip
+          sudo apt-get install -y wget tar unzip || true
           mkdir -p $HOME/android-sdk
           cd $HOME/android-sdk
-          wget https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
-          unzip commandlinetools-linux-*.zip
-          mkdir -p cmdline-tools
-          mv cmdline-tools cmdline-tools/latest
+
+          # download command line tools
+          wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
+
+          # unzip into a temporary folder to avoid "move into itself" problem
+          mkdir -p tmpcmd
+          unzip -q commandlinetools-linux-*.zip -d tmpcmd
+
+          # create target structure and move files correctly
+          mkdir -p cmdline-tools/latest
+          mv tmpcmd/cmdline-tools/* cmdline-tools/latest/
+
+          # cleanup
+          rm -rf tmpcmd
+          rm -f commandlinetools-linux-*.zip
+
+          # set ANDROID_HOME for this step
           export ANDROID_HOME=$HOME/android-sdk
           export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$PATH
-          echo "y" | sdkmanager --sdk_root=$ANDROID_HOME "platform-tools"
-          echo "y" | sdkmanager --sdk_root=$ANDROID_HOME "platforms;android-33"
-          echo "y" | sdkmanager --sdk_root=$ANDROID_HOME "build-tools;33.0.2"
+
+          # accept licenses and install basic SDK packages
+          yes | sdkmanager --sdk_root=$ANDROID_HOME --licenses || true
+          sdkmanager --sdk_root=$ANDROID_HOME "platform-tools" "platforms;android-33" "build-tools;33.0.2"
 
       - name: Setup Android env
         run: |
