@@ -66,6 +66,7 @@ jobs:
           npx cap init FireChat com.firechat.app --web-dir=dist || true
           npx cap add android || true
           npx cap sync android || true
+          echo "----- android folder listing -----"
           ls -la android || true
 
       - name: Install Android SDK
@@ -113,12 +114,10 @@ jobs:
             > android/gradle/wrapper/gradle-wrapper.properties
 
           if [ -f android/build.gradle ]; then
-            # replace android gradle plugin version with 8.1.0 (best-effort)
             perl -0777 -pe 's/com\.android\.tools\.build:gradle:[0-9\.]+/com.android.tools.build:gradle:8.1.0/g' -i android/build.gradle || true
           fi
 
           if [ -f android/app/build.gradle ]; then
-            # set compileSdkVersion and targetSdkVersion to 34 if present
             perl -0777 -pe 's/compileSdkVersion\s+\d+/compileSdkVersion 34/g' -i android/app/build.gradle || true
             perl -0777 -pe 's/targetSdkVersion\s+\d+/targetSdkVersion 34/g' -i android/app/build.gradle || true
           fi
@@ -163,6 +162,23 @@ jobs:
             ./gradlew assembleDebug --stacktrace --debug --no-daemon -Dorg.gradle.java.home="$JAVA_HOME" 2>&1 | tee build-debug.log || true
           fi
 
+      - name: Collect ANY APK from workspace
+        run: |
+          echo "Searching globally for any *.apk files from repo/workspace..."
+          rm -rf apk-artifact || true
+          mkdir -p apk-artifact
+          # find and copy any apk found (preserve name)
+          find "$GITHUB_WORKSPACE" -type f -iname "*.apk" -print | tee found_apk_paths.txt || true
+          while read -r p; do
+            if [ -f "$p" ]; then
+              cp -v "$p" apk-artifact/ || true
+            fi
+          done < found_apk_paths.txt || true
+          echo "--- final apk-artifact listing ---"
+          ls -la apk-artifact || true
+          echo "Found paths (first 100):"
+          head -n 100 found_apk_paths.txt || true
+
       - name: Upload build logs (for debugging)
         if: always()
         uses: actions/upload-artifact@v4
@@ -171,20 +187,6 @@ jobs:
           path: |
             android/build.log
             android/build-debug.log
-
-      - name: Collect any built APKs
-        working-directory: android
-        run: |
-          echo "Looking for .apk files under android/ ..."
-          mkdir -p ../apk-artifact
-          # find .apk files and copy preserving directory structure into ../apk-artifact
-          find . -type f -name "*.apk" -print0 | while IFS= read -r -d '' f; do
-            dst="../apk-artifact/$(dirname "$f")"
-            mkdir -p "$dst"
-            cp "$f" "$dst/$(basename "$f")" || true
-          done
-          echo "Collected artifacts (listing):"
-          ls -R ../apk-artifact || true
 
       - name: Upload found APKs
         if: always()
