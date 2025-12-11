@@ -24,7 +24,6 @@ jobs:
         with:
           node-version: 18
 
-      # Cache npm deps
       - name: Cache node modules
         uses: actions/cache@v4
         with:
@@ -35,7 +34,6 @@ jobs:
           restore-keys: |
             node-modules-
 
-      # Cache Gradle
       - name: Cache Gradle
         uses: actions/cache@v4
         with:
@@ -74,8 +72,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y wget unzip || true
-          mkdir -p $HOME/android-sdk
-          cd $HOME/android-sdk
+          mkdir -p "$HOME/android-sdk"
+          cd "$HOME/android-sdk"
 
           wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
           mkdir -p tmpcmd
@@ -87,27 +85,25 @@ jobs:
           rm -rf tmpcmd
           rm -f commandlinetools-linux-*.zip
 
-          export ANDROID_HOME=$HOME/android-sdk
-          export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$PATH
+          export ANDROID_HOME="$HOME/android-sdk"
+          export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
 
-          yes | sdkmanager --sdk_root=$ANDROID_HOME --licenses || true
-          sdkmanager --sdk_root=$ANDROID_HOME "platform-tools" "platforms;android-34" "build-tools;34.0.0" || true
+          yes | sdkmanager --sdk_root="$ANDROID_HOME" --licenses || true
+          sdkmanager --sdk_root="$ANDROID_HOME" "platform-tools" "platforms;android-34" "build-tools;34.0.0" || true
 
       - name: Export Android Env
         run: |
-          # Make sure both env vars point to the same SDK to avoid Gradle confusion
+          # Keep both env vars pointing to same SDK folder to avoid Gradle confusion
           echo "ANDROID_HOME=$HOME/android-sdk" >> $GITHUB_ENV
           echo "ANDROID_SDK_ROOT=$HOME/android-sdk" >> $GITHUB_ENV
           echo "$HOME/android-sdk/platform-tools" >> $GITHUB_PATH
           echo "$HOME/android-sdk/cmdline-tools/latest/bin" >> $GITHUB_PATH
-          # expose JAVA_HOME set by actions/setup-java
           echo "JAVA_HOME=$JAVA_HOME" >> $GITHUB_ENV
 
       - name: Patch Gradle & AGP
         run: |
           mkdir -p android/gradle/wrapper
 
-          # write a compatible Gradle distribution
           printf '%s\n' \
             "distributionBase=GRADLE_USER_HOME" \
             "distributionPath=wrapper/dists" \
@@ -116,24 +112,30 @@ jobs:
             "distributionUrl=https://services.gradle.org/distributions/gradle-8.3-bin.zip" \
             > android/gradle/wrapper/gradle-wrapper.properties
 
-          # update AGP to an 8.x version compatible with Java 17 (best-effort)
           if [ -f android/build.gradle ]; then
-            perl -0777 -pe "s/com\\.android\\.tools\\.build:gradle:[0-9\\.]+/com.android.tools.build:gradle:8.1.0/g" -i android/build.gradle || true
+            # replace android gradle plugin version with 8.1.0 (best-effort)
+            perl -0777 -pe 's/com\.android\.tools\.build:gradle:[0-9\.]+/com.android.tools.build:gradle:8.1.0/g' -i android/build.gradle || true
           fi
 
-          # force compile/target SDK to 34 (if present)
           if [ -f android/app/build.gradle ]; then
-            perl -0777 -pe "s/compileSdkVersion\\s+\\d+/compileSdkVersion 34/g" -i android/app/build.gradle || true
-            perl -0777 -pe "s/targetSdkVersion\\s+\\d+/targetSdkVersion 34/g" -i android/app/build.gradle || true
+            # set compileSdkVersion and targetSdkVersion to 34 if present
+            perl -0777 -pe 's/compileSdkVersion\s+\d+/compileSdkVersion 34/g' -i android/app/build.gradle || true
+            perl -0777 -pe 's/targetSdkVersion\s+\d+/targetSdkVersion 34/g' -i android/app/build.gradle || true
           fi
- - name: Build APK (capture logs + upload)
+
+      - name: Debug android folder
+        run: |
+          echo "Listing android folder (for debug)"
+          ls -la android || true
+
+      - name: Build APK (capture logs + upload)
         working-directory: android
         env:
           GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx1536m"
         run: |
           set -euo pipefail
 
-          # ensure GRADLE_USER_HOME defined (prevents "unbound variable")
+          # ensure GRADLE_USER_HOME defined (prevents unbound variable)
           export GRADLE_USER_HOME="${GRADLE_USER_HOME:-$HOME/.gradle}"
 
           if [ ! -f ./gradlew ]; then
@@ -151,11 +153,9 @@ jobs:
           echo "ANDROID_HOME=${ANDROID_HOME:-$HOME/android-sdk}"
           echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-$HOME/android-sdk}"
 
-          # Run Gradle and save plain output to build.log (also show on console)
           echo "--- Running gradle (normal) ---"
           ./gradlew assembleDebug --stacktrace --info --no-daemon -Dorg.gradle.java.home="$JAVA_HOME" 2>&1 | tee build.log || true
 
-          # If build succeeded then skip debug; check exit code of grep for "BUILD SUCCESSFUL"
           if grep -q "BUILD SUCCESSFUL" build.log; then
             echo "Build succeeded (normal run)."
           else
@@ -173,6 +173,7 @@ jobs:
             android/build-debug.log
 
       - name: Upload APK
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: firechat-debug-apk
