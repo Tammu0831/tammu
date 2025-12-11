@@ -172,9 +172,23 @@ jobs:
             android/build.log
             android/build-debug.log
 
-      - name: Upload APK
+      - name: Collect any built APKs
+        working-directory: android
+        run: |
+          echo "Looking for .apk files under android/ ..."
+          mkdir -p ../apk-artifact
+          # find .apk files and copy preserving directory structure into ../apk-artifact
+          find . -type f -name "*.apk" -print0 | while IFS= read -r -d '' f; do
+            dst="../apk-artifact/$(dirname "$f")"
+            mkdir -p "$dst"
+            cp "$f" "$dst/$(basename "$f")" || true
+          done
+          echo "Collected artifacts (listing):"
+          ls -R ../apk-artifact || true
+
+      - name: Upload found APKs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: firechat-debug-apk
-          path: android/app/build/outputs/**/*.apk
+          name: found-apks
+          path: apk-artifact/**
