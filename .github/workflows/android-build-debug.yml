@@ -126,8 +126,6 @@ jobs:
             perl -0777 -pe "s/compileSdkVersion\\s+\\d+/compileSdkVersion 34/g" -i android/app/build.gradle || true
             perl -0777 -pe "s/targetSdkVersion\\s+\\d+/targetSdkVersion 34/g" -i android/app/build.gradle || true
           fi
-- name: Debug android folder
-        run: ls -R android || true
  - name: Build APK (capture logs + upload)
         working-directory: android
         env:
