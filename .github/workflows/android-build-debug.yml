@@ -126,16 +126,17 @@ jobs:
             perl -0777 -pe "s/compileSdkVersion\\s+\\d+/compileSdkVersion 34/g" -i android/app/build.gradle || true
             perl -0777 -pe "s/targetSdkVersion\\s+\\d+/targetSdkVersion 34/g" -i android/app/build.gradle || true
           fi
-
-      - name: Build APK (safe + verbose)
+- name: Debug android folder
+        run: ls -R android || true
+ - name: Build APK (capture logs + upload)
         working-directory: android
         env:
           GRADLE_OPTS: "-Dorg.gradle.jvmargs=-Xmx1536m"
         run: |
           set -euo pipefail
 
-          # FIX: define GRADLE_USER_HOME to avoid "unbound variable"
-          export GRADLE_USER_HOME="$HOME/.gradle"
+          # ensure GRADLE_USER_HOME defined (prevents "unbound variable")
+          export GRADLE_USER_HOME="${GRADLE_USER_HOME:-$HOME/.gradle}"
 
           if [ ! -f ./gradlew ]; then
             echo "ERROR: gradlew not found in android/ - cannot build" >&2
@@ -145,28 +146,33 @@ jobs:
 
           chmod +x ./gradlew || true
 
-          echo "Gradle wrapper version:"
+          echo "Gradle wrapper info:"
           ./gradlew -version || true
 
-          # JAVA_HOME is already set by setup-java
-          echo "JAVA_HOME from environment is $JAVA_HOME"
+          echo "JAVA_HOME=$JAVA_HOME"
+          echo "ANDROID_HOME=${ANDROID_HOME:-$HOME/android-sdk}"
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-$HOME/android-sdk}"
 
-          # safe cleanup
-          rm -rf "$GRADLE_USER_HOME/caches/jars-9" || true
+          # Run Gradle and save plain output to build.log (also show on console)
+          echo "--- Running gradle (normal) ---"
+          ./gradlew assembleDebug --stacktrace --info --no-daemon -Dorg.gradle.java.home="$JAVA_HOME" 2>&1 | tee build.log || true
 
-          # run with retries
-          ATTEMPTS=2
-          for i in $(seq 1 $ATTEMPTS); do
-            echo "Gradle attempt $i/$ATTEMPTS ..."
-            ./gradlew assembleDebug --stacktrace --info --no-daemon && break
-            echo "Gradle attempt $i failed; retrying..."
-            sleep 6
-            if [ "$i" -eq "$ATTEMPTS" ]; then
-              echo "Final attempt (debug logs):"
-              ./gradlew assembleDebug --stacktrace --debug --no-daemon || true
-              exit 1
-            fi
-          done
+          # If build succeeded then skip debug; check exit code of grep for "BUILD SUCCESSFUL"
+          if grep -q "BUILD SUCCESSFUL" build.log; then
+            echo "Build succeeded (normal run)."
+          else
+            echo "Normal run failed — running final debug attempt and saving build-debug.log"
+            ./gradlew assembleDebug --stacktrace --debug --no-daemon -Dorg.gradle.java.home="$JAVA_HOME" 2>&1 | tee build-debug.log || true
+          fi
+
+      - name: Upload build logs (for debugging)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-build-logs
+          path: |
+            android/build.log
+            android/build-debug.log
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
