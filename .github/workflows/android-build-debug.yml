@@ -134,6 +134,9 @@ jobs:
         run: |
           set -euo pipefail
 
+          # FIX: define GRADLE_USER_HOME to avoid "unbound variable"
+          export GRADLE_USER_HOME="$HOME/.gradle"
+
           if [ ! -f ./gradlew ]; then
             echo "ERROR: gradlew not found in android/ - cannot build" >&2
             ls -la || true
@@ -145,29 +148,22 @@ jobs:
           echo "Gradle wrapper version:"
           ./gradlew -version || true
 
-          # compute JAVA_HOME reliably (use the one provided by setup-java)
-          if [ -z "${JAVA_HOME:-}" ]; then
-            JAVA_HOME_DIR=$(dirname "$(dirname "$(readlink -f "$(which java)")")")
-            export JAVA_HOME="$JAVA_HOME_DIR"
-            echo "Computed JAVA_HOME=$JAVA_HOME"
-          else
-            echo "JAVA_HOME from environment is $JAVA_HOME"
-          fi
+          # JAVA_HOME is already set by setup-java
+          echo "JAVA_HOME from environment is $JAVA_HOME"
 
-          # clear old jar caches if any (safe)
+          # safe cleanup
           rm -rf "$GRADLE_USER_HOME/caches/jars-9" || true
-          rm -rf "$HOME/.gradle/caches/jars-9" || true
 
-          # run assemble with retries (network/transient protection)
+          # run with retries
           ATTEMPTS=2
           for i in $(seq 1 $ATTEMPTS); do
             echo "Gradle attempt $i/$ATTEMPTS ..."
-            ./gradlew assembleDebug --stacktrace --info --no-daemon -Dorg.gradle.java.home="$JAVA_HOME" && break
-            echo "Gradle attempt $i failed; retrying after sleep..."
-            sleep $((i * 6))
+            ./gradlew assembleDebug --stacktrace --info --no-daemon && break
+            echo "Gradle attempt $i failed; retrying..."
+            sleep 6
             if [ "$i" -eq "$ATTEMPTS" ]; then
-              echo "Final Gradle attempt (debug output):"
-              ./gradlew assembleDebug --stacktrace --debug --no-daemon -Dorg.gradle.java.home="$JAVA_HOME" || true
+              echo "Final attempt (debug logs):"
+              ./gradlew assembleDebug --stacktrace --debug --no-daemon || true
               exit 1
             fi
           done
